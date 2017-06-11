@@ -19,6 +19,7 @@ limitations under the License.
 package serverhelpers
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
@@ -29,7 +30,13 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
+	"github.com/google/credstore/client"
+	"github.com/grpc-ecosystem/go-grpc-middleware"
+	"github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
+	opentracing "github.com/opentracing/opentracing-go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 var (
@@ -39,6 +46,9 @@ var (
 	serverCert = flag.String("server-cert", "", "server TLS cert")
 	serverKey  = flag.String("server-key", "", "server TLS key")
 	clientCA   = flag.String("client-ca", "", "client CA")
+
+	credStoreAddress = flag.String("credstore-address", "", "credstore grpc address")
+	credStoreCA      = flag.String("credstore-ca", "", "credstore server ca")
 )
 
 func grpcHandlerFunc(grpcServer *grpc.Server, otherHandler http.Handler) http.Handler {
@@ -106,4 +116,36 @@ func ListenAndServe(grpcServer *grpc.Server, otherHandler http.Handler) error {
 	glog.Warningf("serving INSECURE on %v", *ListenAddress)
 	err = grpcServer.Serve(lis)
 	return fmt.Errorf("failed to serve: %v", err)
+}
+
+// NewServer creates a new GRPC server stub with credstore auth (if requested).
+func NewServer() (*grpc.Server, *client.CredstoreClient, error) {
+	var grpcServer *grpc.Server
+	var cc *client.CredstoreClient
+
+	if *credStoreAddress != "" {
+		var err error
+		cc, err = client.NewCredstoreClient(context.Background(), *credStoreAddress, *credStoreCA)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to init credstore: %v", err)
+		}
+
+		glog.Infof("enabled credstore auth")
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+				otgrpc.OpenTracingServerInterceptor(opentracing.GlobalTracer()),
+				grpc_prometheus.UnaryServerInterceptor,
+				client.CredStoreTokenInterceptor(cc.SigningKey()),
+				client.CredStoreMethodAuthInterceptor(),
+			)))
+	} else {
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(
+				otgrpc.OpenTracingServerInterceptor(opentracing.GlobalTracer())))
+	}
+
+	reflection.Register(grpcServer)
+	grpc_prometheus.Register(grpcServer)
+
+	return grpcServer, cc, nil
 }
