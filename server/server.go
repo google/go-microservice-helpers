@@ -16,7 +16,7 @@ limitations under the License.
 
 */
 
-package server
+package serverhelpers
 
 import (
 	"crypto/tls"

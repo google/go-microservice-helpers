@@ -16,7 +16,7 @@ limitations under the License.
 
 */
 
-package client
+package clienthelpers
 
 import (
 	"crypto/tls"
