@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -46,6 +47,8 @@ var (
 	serverCert = flag.String("server-cert", "", "server TLS cert")
 	serverKey  = flag.String("server-key", "", "server TLS key")
 	clientCA   = flag.String("client-ca", "", "client CA")
+	allowedCN  = flag.String("allowed-cn", "", "allowed CommonName for client authentication")
+
 
 	credStoreAddress = flag.String("credstore-address", "", "credstore grpc address")
 	credStoreCA      = flag.String("credstore-ca", "", "credstore server ca")
@@ -93,12 +96,27 @@ func ListenAndServe(grpcServer *grpc.Server, otherHandler http.Handler) error {
 			h = grpcHandlerFunc(grpcServer, otherHandler)
 		}
 
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{serverCertKeypair},
+			NextProtos:   []string{"h2"},
+		}
+
+		if *allowedCN != "" {
+			tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+				for _, chains := range verifiedChains {
+					if len(chains) != 0 {
+						if *allowedCN == chains[0].Subject.CommonName {
+							return nil
+						}
+					}
+				}
+				return errors.New("CommonName authentication failed")
+			}
+		}
+
 		httpsServer := &http.Server{
 			Handler: h,
-			TLSConfig: &tls.Config{
-				Certificates: []tls.Certificate{serverCertKeypair},
-				NextProtos:   []string{"h2"},
-			},
+			TLSConfig: tlsConfig,
 		}
 
 		if clientCertPool != nil {
